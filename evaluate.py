@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import argparse
+from datetime import datetime
 
 import fire
 
@@ -86,6 +87,8 @@ def main(
         print()
     """
     save_file = f'experiment/{args.model}-{args.adapter}-{args.dataset}.json'
+    summary_jsonl = 'experiment/eval_summary.jsonl'
+    summary_tsv = 'experiment/eval_summary.tsv'
     create_dir('experiment/')
 
     dataset = load_data(args)
@@ -129,7 +132,30 @@ def main(
             json.dump(output_data, f, indent=4)
         pbar.update(1)
     pbar.close()
+    accuracy = correct / total if total else 0.0
+    summary = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "model": args.model,
+        "adapter": args.adapter,
+        "dataset": args.dataset,
+        "base_model": args.base_model,
+        "weights": args.lora_weights if args.lora_weights else "N/A",
+        "total_questions": total,
+        "correct": correct,
+        "accuracy": accuracy,
+    }
+    append_summary(summary_jsonl, summary_tsv, summary)
     print('\n')
+    print(
+        "FINAL_RESULT | "
+        f"time={summary['timestamp']} | "
+        f"model={args.model} | "
+        f"adapter={args.adapter} | "
+        f"dataset={args.dataset} | "
+        f"total={total} | "
+        f"correct={correct} | "
+        f"accuracy={accuracy:.6f}"
+    )
     print('test finished')
 
 
@@ -137,6 +163,29 @@ def create_dir(dir_path):
     if not os.path.exists(dir_path):
         os.mkdir(dir_path)
     return
+
+
+def append_summary(jsonl_path, tsv_path, summary):
+    with open(jsonl_path, 'a') as f:
+        f.write(json.dumps(summary) + '\n')
+
+    header = [
+        "timestamp",
+        "model",
+        "adapter",
+        "dataset",
+        "base_model",
+        "weights",
+        "total_questions",
+        "correct",
+        "accuracy",
+    ]
+    write_header = not os.path.exists(tsv_path)
+    with open(tsv_path, 'a') as f:
+        if write_header:
+            f.write('\t'.join(header) + '\n')
+        row = [str(summary[key]) for key in header]
+        f.write('\t'.join(row) + '\n')
 
 
 def generate_prompt(instruction, input=None):

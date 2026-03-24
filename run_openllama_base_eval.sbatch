@@ -34,3 +34,6 @@ python evaluate.py \
   --baseline \
   --dataset "AQuA" \
   --base_model "openlm-research/open_llama_3b_v2"
+
+echo "Recent evaluation summary:"
+tail -n 4 "${REPO_DIR}/experiment/eval_summary.tsv"

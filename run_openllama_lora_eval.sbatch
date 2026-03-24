@@ -35,3 +35,6 @@ python evaluate.py \
   --dataset "AQuA" \
   --base_model "openlm-research/open_llama_3b_v2" \
   --lora_weights "${MODEL_DIR}"
+
+echo "Recent evaluation summary:"
+tail -n 4 "${REPO_DIR}/experiment/eval_summary.tsv"
