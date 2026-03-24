@@ -27,8 +27,8 @@ python finetune.py \
   --data_path "./ft-training_set/math_7k.json" \
   --output_dir "./trained_models/openllama-3b-lora-epoch1" \
   --adapter_name "lora" \
-  --batch_size 2 \
-  --micro_batch_size 2 \
+  --batch_size 4 \
+  --micro_batch_size 4 \
   --num_epochs 1 \
   --learning_rate 3e-4 \
   --cutoff_len 256 \
