@@ -3,3 +3,4 @@ __pycache__
 /peft/src/peft/__pycache__
 logs/
 trained_models/
+.json
