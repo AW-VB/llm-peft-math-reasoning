@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import argparse
+import time
 from datetime import datetime
 
 import fire
@@ -86,6 +87,7 @@ def main(
         print("Response:", evaluate(instruction))
         print()
     """
+    eval_start_time = time.time()
     save_file = f'experiment/{args.model}-{args.adapter}-{args.dataset}.json'
     summary_jsonl = 'experiment/eval_summary.jsonl'
     summary_tsv = 'experiment/eval_summary.tsv'
@@ -132,6 +134,7 @@ def main(
             json.dump(output_data, f, indent=4)
         pbar.update(1)
     pbar.close()
+    eval_time_seconds = time.time() - eval_start_time
     accuracy = correct / total if total else 0.0
     summary = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -143,6 +146,8 @@ def main(
         "total_questions": total,
         "correct": correct,
         "accuracy": accuracy,
+        "eval_time_seconds": round(eval_time_seconds, 4),
+        "eval_time_hms": format_duration(eval_time_seconds),
     }
     append_summary(summary_jsonl, summary_tsv, summary)
     print('\n')
@@ -154,7 +159,8 @@ def main(
         f"dataset={args.dataset} | "
         f"total={total} | "
         f"correct={correct} | "
-        f"accuracy={accuracy:.6f}"
+        f"accuracy={accuracy:.6f} | "
+        f"eval_time={format_duration(eval_time_seconds)}"
     )
     print('test finished')
 
@@ -179,6 +185,8 @@ def append_summary(jsonl_path, tsv_path, summary):
         "total_questions",
         "correct",
         "accuracy",
+        "eval_time_seconds",
+        "eval_time_hms",
     ]
     write_header = not os.path.exists(tsv_path)
     with open(tsv_path, 'a') as f:
@@ -186,6 +194,14 @@ def append_summary(jsonl_path, tsv_path, summary):
             f.write('\t'.join(header) + '\n')
         row = [str(summary[key]) for key in header]
         f.write('\t'.join(row) + '\n')
+
+
+def format_duration(seconds):
+    total_seconds = int(round(seconds))
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    secs = total_seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 def generate_prompt(instruction, input=None):

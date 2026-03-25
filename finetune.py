@@ -1,5 +1,7 @@
 import os
 import sys
+import json
+from datetime import datetime
 from typing import List
 
 import fire
@@ -24,6 +26,54 @@ from peft import (  # noqa: E402
     set_peft_model_state_dict,
 )
 from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaTokenizer, AutoModel  # noqa: F402
+
+
+def create_dir(dir_path):
+    if not os.path.exists(dir_path):
+        os.mkdir(dir_path)
+    return
+
+
+def append_summary(jsonl_path, tsv_path, summary):
+    with open(jsonl_path, "a") as f:
+        f.write(json.dumps(summary) + "\n")
+
+    header = [
+        "timestamp",
+        "base_model",
+        "data_path",
+        "output_dir",
+        "adapter",
+        "batch_size",
+        "micro_batch_size",
+        "gradient_accumulation_steps",
+        "num_epochs",
+        "learning_rate",
+        "cutoff_len",
+        "val_set_size",
+        "use_gradient_checkpointing",
+        "load_8bit",
+        "train_runtime_seconds",
+        "train_runtime_hms",
+        "train_loss",
+        "train_samples_per_second",
+        "train_steps_per_second",
+        "epoch",
+    ]
+    write_header = not os.path.exists(tsv_path)
+    with open(tsv_path, "a") as f:
+        if write_header:
+            f.write("\t".join(header) + "\n")
+        row = [str(summary[key]) for key in header]
+        f.write("\t".join(row) + "\n")
+
+
+def format_duration(seconds):
+    total_seconds = int(round(seconds))
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    secs = total_seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 def train(
@@ -311,9 +361,54 @@ def train(
     if torch.__version__ >= "2" and sys.platform != "win32":
         model = torch.compile(model)
 
-    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+    train_result = trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 
     model.save_pretrained(output_dir)
+
+    create_dir("experiment")
+    metrics = train_result.metrics
+    adapter_label = "AdapterP" if use_adapterp else (
+        "Parallel" if use_parallel_adapter else adapter_name
+    )
+    summary = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "base_model": base_model,
+        "data_path": data_path,
+        "output_dir": output_dir,
+        "adapter": adapter_label,
+        "batch_size": batch_size,
+        "micro_batch_size": micro_batch_size,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "num_epochs": num_epochs,
+        "learning_rate": learning_rate,
+        "cutoff_len": cutoff_len,
+        "val_set_size": val_set_size,
+        "use_gradient_checkpointing": use_gradient_checkpointing,
+        "load_8bit": load_8bit,
+        "train_runtime_seconds": round(metrics.get("train_runtime", 0.0), 4),
+        "train_runtime_hms": format_duration(metrics.get("train_runtime", 0.0)),
+        "train_loss": metrics.get("train_loss"),
+        "train_samples_per_second": metrics.get("train_samples_per_second"),
+        "train_steps_per_second": metrics.get("train_steps_per_second"),
+        "epoch": metrics.get("epoch"),
+    }
+    append_summary(
+        "experiment/train_summary.jsonl",
+        "experiment/train_summary.tsv",
+        summary,
+    )
+    print(
+        "FINAL_TRAIN_RESULT | "
+        f"time={summary['timestamp']} | "
+        f"adapter={summary['adapter']} | "
+        f"base_model={base_model} | "
+        f"data={data_path} | "
+        f"epochs={num_epochs} | "
+        f"batch_size={batch_size} | "
+        f"micro_batch_size={micro_batch_size} | "
+        f"train_loss={summary['train_loss']} | "
+        f"train_runtime={summary['train_runtime_hms']}"
+    )
 
     print(
         "\n If there's a warning about missing keys above, please disregard :)"
