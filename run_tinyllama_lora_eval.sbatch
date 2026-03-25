@@ -23,14 +23,14 @@ source /apps/anaconda3-2025.06-0/etc/profile.d/conda.sh
 conda activate llm
 
 python evaluate.py \
-  --model "LLaMA-7B" \
+  --model "TinyLlama" \
   --adapter "LoRA" \
   --dataset "AddSub" \
   --base_model "TinyLlama/TinyLlama_v1.1" \
   --lora_weights "${MODEL_DIR}"
 
 python evaluate.py \
-  --model "LLaMA-7B" \
+  --model "TinyLlama" \
   --adapter "LoRA" \
   --dataset "AQuA" \
   --base_model "TinyLlama/TinyLlama_v1.1" \
