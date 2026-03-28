@@ -7,14 +7,12 @@ import argparse
 import time
 from datetime import datetime
 
-import fire
-
 import torch
 
 sys.path.append(os.path.join(os.getcwd(), "peft/src/"))
 from peft import PeftModel
 from tqdm import tqdm
-from transformers import GenerationConfig, LlamaForCausalLM, LlamaTokenizer, AutoModelForCausalLM, AutoTokenizer
+from transformers import GenerationConfig, LlamaTokenizer, AutoModelForCausalLM, AutoTokenizer
 
 if torch.cuda.is_available():
     device = "cuda"
@@ -37,8 +35,8 @@ def main(
 ):
     args = parse_args()
 
-    def evaluate(
-            instruction,
+    def evaluate_batch(
+            instructions,
             input=None,
             temperature=0.1,
             top_p=0.75,
@@ -47,28 +45,28 @@ def main(
             max_new_tokens=256,
             **kwargs,
     ):
-        prompt = generate_prompt(instruction, input)
-        inputs = tokenizer(prompt, return_tensors="pt")
+        prompts = [generate_prompt(instruction, input) for instruction in instructions]
+        inputs = tokenizer(prompts, return_tensors="pt", padding=True)
         input_ids = inputs["input_ids"].to(device)
+        attention_mask = inputs["attention_mask"].to(device)
         generation_config = GenerationConfig(
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
             num_beams=num_beams,
+            do_sample=False,
             **kwargs,
         )
         with torch.no_grad():
-            generation_output = model.generate(
+            sequences = model.generate(
                 input_ids=input_ids,
+                attention_mask=attention_mask,
                 generation_config=generation_config,
-                return_dict_in_generate=True,
-                output_scores=True,
                 max_new_tokens=max_new_tokens,
-                use_cache=False,
             )
-        s = generation_output.sequences[0]
-        output = tokenizer.decode(s)
-        return output.split("### Response:")[1].strip()
+        generated_tokens = sequences[:, input_ids.shape[1]:]
+        outputs = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+        return [output.strip() for output in outputs]
 
     """
     # testing code for readme
@@ -96,43 +94,74 @@ def main(
     dataset = load_data(args)
     tokenizer, model = load_model(args)
     total = len(dataset)
-    correct = 0
     miss = 0.001
     output_data = []
-    pbar = tqdm(total=total)
-    for idx, data in enumerate(dataset):
-        instruction = data.get('instruction')
+    start_idx = 0
+    correct = 0
 
-        outputs = evaluate(instruction)
-        label = data.get('answer')
-        flag = False
-        if args.dataset.lower() in ['aqua']:
-            predict = extract_answer_letter(args, outputs)
-            if label == predict:
-                correct += 1
-                flag = True
-        else:
-            if isinstance(label, str):
-                label = float(label)
-            predict = extract_answer_number(args, outputs)
-            if abs(label - predict) <= miss:
-                correct += 1
-                flag = True
-        new_data = copy.deepcopy(data)
-        new_data['output_pred'] = outputs
-        new_data['pred'] = predict
-        new_data['flag'] = flag
-        output_data.append(new_data)
-        print(' ')
-        print('---------------')
-        print(outputs)
-        print('prediction:', predict)
-        print('label:', label)
-        print('---------------')
-        print(f'\rtest:{idx + 1}/{total} | accuracy {correct}  {correct / (idx + 1)}')
-        with open(save_file, 'w+') as f:
-            json.dump(output_data, f, indent=4)
-        pbar.update(1)
+    if args.resume and os.path.exists(save_file):
+        with open(save_file, 'r') as f:
+            output_data = json.load(f)
+        start_idx = len(output_data)
+        correct = sum(1 for item in output_data if item.get('flag'))
+        print(f"Resuming from {save_file}: {start_idx}/{total} samples already evaluated.")
+
+    if start_idx >= total:
+        print("All samples are already evaluated. Skipping generation.")
+        total_to_run = 0
+    else:
+        total_to_run = total - start_idx
+    pbar = tqdm(total=total_to_run, initial=0)
+    for batch_start in range(start_idx, total, args.batch_size):
+        batch = dataset[batch_start: batch_start + args.batch_size]
+        instructions = [data.get('instruction') for data in batch]
+        outputs = evaluate_batch(
+            instructions,
+            num_beams=args.num_beams,
+            max_new_tokens=args.max_new_tokens,
+        )
+
+        for sample_offset, (data, output_text) in enumerate(zip(batch, outputs)):
+            idx = batch_start + sample_offset
+            label = data.get('answer')
+            flag = False
+            if args.dataset.lower() in ['aqua']:
+                predict = extract_answer_letter(args, output_text)
+                if label == predict:
+                    correct += 1
+                    flag = True
+            else:
+                if isinstance(label, str):
+                    label = float(label)
+                predict = extract_answer_number(args, output_text)
+                if abs(label - predict) <= miss:
+                    correct += 1
+                    flag = True
+            new_data = copy.deepcopy(data)
+            new_data['output_pred'] = output_text
+            new_data['pred'] = predict
+            new_data['flag'] = flag
+            output_data.append(new_data)
+
+            if args.verbose:
+                print(' ')
+                print('---------------')
+                print(output_text)
+                print('prediction:', predict)
+                print('label:', label)
+                print('---------------')
+
+            current_done = idx + 1
+            if current_done % args.log_every == 0 or current_done == total:
+                print(f'\rtest:{current_done}/{total} | accuracy {correct}  {correct / current_done}')
+
+        if (
+            len(output_data) % args.save_every == 0
+            or len(output_data) == total
+        ):
+            with open(save_file, 'w') as f:
+                json.dump(output_data, f, indent=4)
+        pbar.update(len(batch))
     pbar.close()
     eval_time_seconds = time.time() - eval_start_time
     accuracy = correct / total if total else 0.0
@@ -253,10 +282,27 @@ def parse_args():
     parser.add_argument('--lora_weights')
     parser.add_argument('--baseline', action='store_true', default=False)
     parser.add_argument('--load_8bit', action='store_true', default=False)
+    parser.add_argument('--batch_size', type=int, default=1)
+    parser.add_argument('--num_beams', type=int, default=4)
+    parser.add_argument('--max_new_tokens', type=int, default=256)
+    parser.add_argument('--save_every', type=int, default=20)
+    parser.add_argument('--log_every', type=int, default=20)
+    parser.add_argument('--resume', action='store_true', default=False)
+    parser.add_argument('--verbose', action='store_true', default=False)
 
     args = parser.parse_args()
     if not args.baseline and not args.lora_weights:
         parser.error("--lora_weights is required unless --baseline is set")
+    if args.batch_size < 1:
+        parser.error("--batch_size must be >= 1")
+    if args.num_beams < 1:
+        parser.error("--num_beams must be >= 1")
+    if args.max_new_tokens < 1:
+        parser.error("--max_new_tokens must be >= 1")
+    if args.save_every < 1:
+        parser.error("--save_every must be >= 1")
+    if args.log_every < 1:
+        parser.error("--log_every must be >= 1")
     return args
 
 
@@ -281,6 +327,9 @@ def load_model(args) -> tuple:
         tokenizer = LlamaTokenizer.from_pretrained(base_model)
     else:
         tokenizer = AutoTokenizer.from_pretrained(base_model)
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else 0
     if device == "cuda":
         model = AutoModelForCausalLM.from_pretrained(
             base_model,
@@ -320,17 +369,17 @@ def load_model(args) -> tuple:
                 device_map={"": device},
             )
 
-        # unwind broken decapoda-research config
-        model.config.pad_token_id = tokenizer.pad_token_id = 0  # unk
-        model.config.bos_token_id = 1
-        model.config.eos_token_id = 2
-
         if not load_8bit:
             model.half()  # seems to fix bugs for some users.
 
-        model.eval()
-        if torch.__version__ >= "2" and sys.platform != "win32":
-            model = torch.compile(model)
+    # Keep generation config consistent across all devices.
+    model.config.pad_token_id = tokenizer.pad_token_id
+    if model.config.bos_token_id is None:
+        model.config.bos_token_id = tokenizer.bos_token_id
+    if model.config.eos_token_id is None:
+        model.config.eos_token_id = tokenizer.eos_token_id
+
+    model.eval()
 
     return tokenizer, model
 
