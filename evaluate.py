@@ -68,6 +68,39 @@ def main(
         outputs = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
         return [output.strip() for output in outputs]
 
+    def evaluate_legacy(
+            instruction,
+            input=None,
+            temperature=0.1,
+            top_p=0.75,
+            top_k=40,
+            num_beams=4,
+            max_new_tokens=256,
+            **kwargs,
+    ):
+        prompt = generate_prompt(instruction, input)
+        inputs = tokenizer(prompt, return_tensors="pt")
+        input_ids = inputs["input_ids"].to(device)
+        generation_config = GenerationConfig(
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            num_beams=num_beams,
+            **kwargs,
+        )
+        with torch.no_grad():
+            generation_output = model.generate(
+                input_ids=input_ids,
+                generation_config=generation_config,
+                return_dict_in_generate=True,
+                output_scores=True,
+                max_new_tokens=max_new_tokens,
+                use_cache=False,
+            )
+        sequence = generation_output.sequences[0]
+        output = tokenizer.decode(sequence)
+        return output.split("### Response:")[1].strip()
+
     """
     # testing code for readme
     for instruction in [
@@ -86,12 +119,21 @@ def main(
         print()
     """
     eval_start_time = time.time()
-    save_file = f'experiment/{args.model}-{args.adapter}-{args.dataset}.json'
-    summary_jsonl = 'experiment/eval_summary.jsonl'
-    summary_tsv = 'experiment/eval_summary.tsv'
+    output_name = f'{args.model}-{args.adapter}-{args.dataset}'
+    if args.output_tag:
+        output_name = f'{output_name}-{args.output_tag}'
+    save_file = f'experiment/{output_name}.json'
+    summary_suffix = ""
+    if args.output_tag:
+        summary_suffix = f"_{sanitize_filename(args.output_tag)}"
+    summary_jsonl = f'experiment/eval_summary{summary_suffix}.jsonl'
+    summary_tsv = f'experiment/eval_summary{summary_suffix}.tsv'
     create_dir('experiment/')
 
     dataset = load_data(args)
+    dataset = dataset[args.sample_offset:]
+    if args.max_samples is not None:
+        dataset = dataset[:args.max_samples]
     tokenizer, model = load_model(args)
     total = len(dataset)
     miss = 0.001
@@ -112,14 +154,24 @@ def main(
     else:
         total_to_run = total - start_idx
     pbar = tqdm(total=total_to_run, initial=0)
-    for batch_start in range(start_idx, total, args.batch_size):
-        batch = dataset[batch_start: batch_start + args.batch_size]
+    effective_batch_size = 1 if args.legacy_eval_mode else args.batch_size
+    for batch_start in range(start_idx, total, effective_batch_size):
+        batch = dataset[batch_start: batch_start + effective_batch_size]
         instructions = [data.get('instruction') for data in batch]
-        outputs = evaluate_batch(
-            instructions,
-            num_beams=args.num_beams,
-            max_new_tokens=args.max_new_tokens,
-        )
+        if args.legacy_eval_mode:
+            outputs = [
+                evaluate_legacy(
+                    instruction,
+                    num_beams=args.num_beams,
+                    max_new_tokens=args.max_new_tokens,
+                ) for instruction in instructions
+            ]
+        else:
+            outputs = evaluate_batch(
+                instructions,
+                num_beams=args.num_beams,
+                max_new_tokens=args.max_new_tokens,
+            )
 
         for sample_offset, (data, output_text) in enumerate(zip(batch, outputs)):
             idx = batch_start + sample_offset
@@ -170,8 +222,15 @@ def main(
         "model": args.model,
         "adapter": args.adapter,
         "dataset": args.dataset,
+        "output_tag": args.output_tag if args.output_tag else "N/A",
         "base_model": args.base_model,
         "weights": args.lora_weights if args.lora_weights else "N/A",
+        "sample_offset": args.sample_offset,
+        "max_samples": total,
+        "legacy_eval_mode": args.legacy_eval_mode,
+        "batch_size": effective_batch_size,
+        "num_beams": args.num_beams,
+        "max_new_tokens": args.max_new_tokens,
         "total_questions": total,
         "correct": correct,
         "accuracy": accuracy,
@@ -200,6 +259,10 @@ def create_dir(dir_path):
     return
 
 
+def sanitize_filename(value):
+    return re.sub(r'[^A-Za-z0-9._-]+', '_', value)
+
+
 def append_summary(jsonl_path, tsv_path, summary):
     with open(jsonl_path, 'a') as f:
         f.write(json.dumps(summary) + '\n')
@@ -209,8 +272,15 @@ def append_summary(jsonl_path, tsv_path, summary):
         "model",
         "adapter",
         "dataset",
+        "output_tag",
         "base_model",
         "weights",
+        "sample_offset",
+        "max_samples",
+        "legacy_eval_mode",
+        "batch_size",
+        "num_beams",
+        "max_new_tokens",
         "total_questions",
         "correct",
         "accuracy",
@@ -289,6 +359,10 @@ def parse_args():
     parser.add_argument('--log_every', type=int, default=20)
     parser.add_argument('--resume', action='store_true', default=False)
     parser.add_argument('--verbose', action='store_true', default=False)
+    parser.add_argument('--sample_offset', type=int, default=0)
+    parser.add_argument('--max_samples', type=int)
+    parser.add_argument('--output_tag', default="")
+    parser.add_argument('--legacy_eval_mode', action='store_true', default=False)
 
     args = parser.parse_args()
     if not args.baseline and not args.lora_weights:
@@ -303,6 +377,10 @@ def parse_args():
         parser.error("--save_every must be >= 1")
     if args.log_every < 1:
         parser.error("--log_every must be >= 1")
+    if args.sample_offset < 0:
+        parser.error("--sample_offset must be >= 0")
+    if args.max_samples is not None and args.max_samples < 1:
+        parser.error("--max_samples must be >= 1")
     return args
 
 
