@@ -489,13 +489,27 @@ def extract_answer_number(args, sentence: str) -> float:
 
 def extract_answer_letter(args, sentence: str) -> str:
     sentence_ = sentence.strip()
-    pred_answers = re.findall(r'A|B|C|D|E', sentence_)
-    if pred_answers:
-        if not pred_answers:
-            return ''
-        return pred_answers[0]
-    else:
-        return ''
+
+    # Prefer explicit answer phrases before falling back to standalone options.
+    explicit_patterns = [
+        r'(?i)\bfinal\s+answer\s+is\s*\(?\s*([A-E])\s*\)?',
+        r'(?i)\banswer\s+is\s*\(?\s*([A-E])\s*\)?',
+        r'(?i)\banswer\s*:\s*\(?\s*([A-E])\s*\)?',
+        r'(?i)\boption(?:\s+is)?\s*\(?\s*([A-E])\s*\)?',
+    ]
+
+    matches = []
+    for pattern in explicit_patterns:
+        matches.extend(re.findall(pattern, sentence_))
+
+    if matches:
+        return matches[-1].upper()
+
+    fallback_matches = re.findall(r'\(?\b([A-E])\b\)?', sentence_, flags=re.IGNORECASE)
+    if fallback_matches:
+        return fallback_matches[-1].upper()
+
+    return ''
 
 
 if __name__ == "__main__":
