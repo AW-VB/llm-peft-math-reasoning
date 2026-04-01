@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+import random
 import re
 import sys
 import argparse
@@ -34,6 +35,7 @@ def main(
         share_gradio: bool = False,
 ):
     args = parse_args()
+    set_random_seed(args.seed)
 
     def evaluate_batch(
             instructions,
@@ -131,6 +133,9 @@ def main(
     create_dir('experiment/')
 
     dataset = load_data(args)
+    if args.shuffle_data:
+        rng = random.Random(args.seed)
+        rng.shuffle(dataset)
     dataset = dataset[args.sample_offset:]
     if args.max_samples is not None:
         dataset = dataset[:args.max_samples]
@@ -225,6 +230,8 @@ def main(
         "output_tag": args.output_tag if args.output_tag else "N/A",
         "base_model": args.base_model,
         "weights": args.lora_weights if args.lora_weights else "N/A",
+        "seed": args.seed,
+        "shuffle_data": args.shuffle_data,
         "sample_offset": args.sample_offset,
         "max_samples": total,
         "legacy_eval_mode": args.legacy_eval_mode,
@@ -259,6 +266,13 @@ def create_dir(dir_path):
     return
 
 
+def set_random_seed(seed):
+    random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
 def sanitize_filename(value):
     return re.sub(r'[^A-Za-z0-9._-]+', '_', value)
 
@@ -275,6 +289,8 @@ def append_summary(jsonl_path, tsv_path, summary):
         "output_tag",
         "base_model",
         "weights",
+        "seed",
+        "shuffle_data",
         "sample_offset",
         "max_samples",
         "legacy_eval_mode",
@@ -359,6 +375,8 @@ def parse_args():
     parser.add_argument('--log_every', type=int, default=20)
     parser.add_argument('--resume', action='store_true', default=False)
     parser.add_argument('--verbose', action='store_true', default=False)
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--shuffle_data', action='store_true', default=False)
     parser.add_argument('--sample_offset', type=int, default=0)
     parser.add_argument('--max_samples', type=int)
     parser.add_argument('--output_tag', default="")
