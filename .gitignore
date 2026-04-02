@@ -2,5 +2,9 @@ __pycache__
 .idea/*
 /peft/src/peft/__pycache__
 logs/
-trained_models/
 *.json
+*.pt
+*.bin
+*.safetensors
+*.pth
+.DS_Store
