@@ -47,7 +47,7 @@ def main(
             max_new_tokens=256,
             **kwargs,
     ):
-        prompts = [generate_prompt(instruction, input) for instruction in instructions]
+        prompts = [generate_prompt(args, instruction, input) for instruction in instructions]
         inputs = tokenizer(prompts, return_tensors="pt", padding=True)
         input_ids = inputs["input_ids"].to(device)
         attention_mask = inputs["attention_mask"].to(device)
@@ -80,7 +80,7 @@ def main(
             max_new_tokens=256,
             **kwargs,
     ):
-        prompt = generate_prompt(instruction, input)
+        prompt = generate_prompt(args, instruction, input)
         inputs = tokenizer(prompt, return_tensors="pt")
         input_ids = inputs["input_ids"].to(device)
         generation_config = GenerationConfig(
@@ -235,6 +235,7 @@ def main(
         "sample_offset": args.sample_offset,
         "max_samples": total,
         "legacy_eval_mode": args.legacy_eval_mode,
+        "multiple_choice_direct_answer": args.multiple_choice_direct_answer,
         "batch_size": effective_batch_size,
         "num_beams": args.num_beams,
         "max_new_tokens": args.max_new_tokens,
@@ -294,6 +295,7 @@ def append_summary(jsonl_path, tsv_path, summary):
         "sample_offset",
         "max_samples",
         "legacy_eval_mode",
+        "multiple_choice_direct_answer",
         "batch_size",
         "num_beams",
         "max_new_tokens",
@@ -319,7 +321,29 @@ def format_duration(seconds):
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
-def generate_prompt(instruction, input=None):
+def generate_prompt(args, instruction, input=None):
+    if args.multiple_choice_direct_answer and args.dataset.lower() == 'aqua':
+        if input:
+            return f"""Below is a multiple-choice math question with additional context. Choose the single correct option.
+
+                ### Instruction:
+                {instruction}
+
+                ### Input:
+                {input}
+
+                ### Response:
+                Reply with only the answer letter (A, B, C, D, or E). Do not include any explanation, reasoning, or extra words.
+                """  # noqa: E501
+        else:
+            return f"""Below is a multiple-choice math question. Choose the single correct option.
+
+                ### Instruction:
+                {instruction}
+
+                ### Response:
+                Reply with only the answer letter (A, B, C, D, or E). Do not include any explanation, reasoning, or extra words.
+                """  # noqa: E501
     if input:
         return f"""Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
 
@@ -381,6 +405,7 @@ def parse_args():
     parser.add_argument('--max_samples', type=int)
     parser.add_argument('--output_tag', default="")
     parser.add_argument('--legacy_eval_mode', action='store_true', default=False)
+    parser.add_argument('--multiple_choice_direct_answer', action='store_true', default=False)
 
     args = parser.parse_args()
     if not args.baseline and not args.lora_weights:
@@ -507,6 +532,24 @@ def extract_answer_number(args, sentence: str) -> float:
 
 def extract_answer_letter(args, sentence: str) -> str:
     sentence_ = sentence.strip()
+
+    if args.multiple_choice_direct_answer:
+        direct_patterns = [
+            r'^\s*\(?\s*([A-E])\s*\)?[\s\.\,\!\?\:\;]*$',
+            r'(?i)^\s*answer\s*[:\-]?\s*\(?\s*([A-E])\s*\)?[\s\.\,\!\?\:\;]*$',
+            r'(?i)^\s*option\s*[:\-]?\s*\(?\s*([A-E])\s*\)?[\s\.\,\!\?\:\;]*$',
+        ]
+        for pattern in direct_patterns:
+            match = re.search(pattern, sentence_)
+            if match:
+                return match.group(1).upper()
+
+        # In direct-answer mode, prefer the earliest option token if the model
+        # still emits a short phrase instead of a bare letter.
+        fallback_matches = re.findall(r'\(?\b([A-E])\b\)?', sentence_, flags=re.IGNORECASE)
+        if fallback_matches:
+            return fallback_matches[0].upper()
+        return ''
 
     # Prefer explicit answer phrases before falling back to standalone options.
     explicit_patterns = [
