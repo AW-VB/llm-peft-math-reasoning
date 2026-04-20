@@ -15,6 +15,7 @@ set -euo pipefail
 REPO_DIR="/home/msds/sirui005/SIRUI005/llm-peft-math-reasoning"
 OPENLLAMA_BASE_MODEL="openlm-research/open_llama_3b_v2"
 TINYLLAMA_BASE_MODEL="TinyLlama/TinyLlama_v1.1"
+DATASET_NAME="gsm8k"
 EVAL_BATCH_SIZE=8
 SUMMARY_FILE="${REPO_DIR}/experiment/gsm8k_rerun_openllama_tinyllama_all.tsv"
 
@@ -26,6 +27,13 @@ set +u
 source /apps/anaconda3-2025.06-0/etc/profile.d/conda.sh
 conda activate llm
 set -u
+
+DATASET_TOTAL=$(python - <<PY
+import json
+with open("${REPO_DIR}/dataset/${DATASET_NAME}/test.json", "r") as f:
+    print(len(json.load(f)))
+PY
+)
 
 printf 'run_name\tmodel\tadapter\tepoch\ttotal\tcorrect\taccuracy\telapsed_seconds\tresult_json\n' > "${SUMMARY_FILE}"
 JOB_START_TIME=$(date +%s)
@@ -63,6 +71,22 @@ print(
 PY
 }
 
+result_count() {
+  local result_json="$1"
+  python - <<PY
+import json
+path = ${result_json@Q}
+try:
+    with open(path, "r") as f:
+        data = json.load(f)
+    print(len(data))
+except FileNotFoundError:
+    print(0)
+except Exception:
+    print(-1)
+PY
+}
+
 run_eval() {
   local run_name="$1"
   local model_name="$2"
@@ -73,11 +97,30 @@ run_eval() {
   local start_time
   local end_time
   local elapsed_seconds
+  local existing_count
+
   echo "============================================================"
   echo "[$(date '+%F %T')] Starting ${run_name}"
   echo "============================================================"
+
+  existing_count=$(result_count "${result_json}")
+  if [[ "${existing_count}" == "${DATASET_TOTAL}" ]]; then
+    echo "Existing completed result found for ${run_name}: ${existing_count}/${DATASET_TOTAL}. Skipping evaluation."
+    append_summary_row "${run_name}" "${model_name}" "${adapter_name}" "${epoch_label}" "${result_json}" "0"
+    echo "============================================================"
+    echo "[$(date '+%F %T')] Finished ${run_name} (skipped, already complete)"
+    echo "============================================================"
+    return
+  fi
+
+  if [[ "${existing_count}" =~ ^[0-9]+$ ]] && [[ "${existing_count}" -gt 0 ]]; then
+    echo "Resuming ${run_name} from ${existing_count}/${DATASET_TOTAL} saved samples."
+  elif [[ "${existing_count}" == "-1" ]]; then
+    echo "Existing result file for ${run_name} is unreadable JSON; evaluate.py will overwrite or fail accordingly."
+  fi
+
   start_time=$(date +%s)
-  python "${REPO_DIR}/evaluate.py" "$@"
+  python "${REPO_DIR}/evaluate.py" --resume "$@"
   end_time=$(date +%s)
   elapsed_seconds=$((end_time - start_time))
   append_summary_row "${run_name}" "${model_name}" "${adapter_name}" "${epoch_label}" "${result_json}" "${elapsed_seconds}"
@@ -94,7 +137,7 @@ run_eval \
   "${REPO_DIR}/experiment/LLaMA-7B-Base-gsm8k-rerun-openllama-base.json" \
   --model "LLaMA-7B" \
   --adapter "Base" \
-  --dataset "gsm8k" \
+  --dataset "${DATASET_NAME}" \
   --base_model "${OPENLLAMA_BASE_MODEL}" \
   --baseline \
   --batch_size "${EVAL_BATCH_SIZE}" \
@@ -108,7 +151,7 @@ run_eval \
   "${REPO_DIR}/experiment/LLaMA-7B-LoRA-gsm8k-rerun-openllama-lora-epoch1.json" \
   --model "LLaMA-7B" \
   --adapter "LoRA" \
-  --dataset "gsm8k" \
+  --dataset "${DATASET_NAME}" \
   --base_model "${OPENLLAMA_BASE_MODEL}" \
   --lora_weights "${REPO_DIR}/trained_models/openllama-3b-lora-epoch1" \
   --batch_size "${EVAL_BATCH_SIZE}" \
@@ -122,7 +165,7 @@ run_eval \
   "${REPO_DIR}/experiment/LLaMA-7B-LoRA-gsm8k-rerun-openllama-lora-epoch2.json" \
   --model "LLaMA-7B" \
   --adapter "LoRA" \
-  --dataset "gsm8k" \
+  --dataset "${DATASET_NAME}" \
   --base_model "${OPENLLAMA_BASE_MODEL}" \
   --lora_weights "${REPO_DIR}/trained_models/openllama-3b-lora-epoch2" \
   --batch_size "${EVAL_BATCH_SIZE}" \
@@ -136,7 +179,7 @@ run_eval \
   "${REPO_DIR}/experiment/LLaMA-7B-LoRA-gsm8k-rerun-openllama-lora-epoch3.json" \
   --model "LLaMA-7B" \
   --adapter "LoRA" \
-  --dataset "gsm8k" \
+  --dataset "${DATASET_NAME}" \
   --base_model "${OPENLLAMA_BASE_MODEL}" \
   --lora_weights "${REPO_DIR}/trained_models/openllama-3b-lora-epoch3" \
   --batch_size "${EVAL_BATCH_SIZE}" \
@@ -150,7 +193,7 @@ run_eval \
   "${REPO_DIR}/experiment/LLaMA-7B-AdapterP-gsm8k-rerun-openllama-adapterp-epoch1.json" \
   --model "LLaMA-7B" \
   --adapter "AdapterP" \
-  --dataset "gsm8k" \
+  --dataset "${DATASET_NAME}" \
   --base_model "${OPENLLAMA_BASE_MODEL}" \
   --lora_weights "${REPO_DIR}/trained_models/openllama-3b-adapterp-epoch1" \
   --batch_size "${EVAL_BATCH_SIZE}" \
@@ -164,7 +207,7 @@ run_eval \
   "${REPO_DIR}/experiment/LLaMA-7B-AdapterP-gsm8k-rerun-openllama-adapterp-epoch2.json" \
   --model "LLaMA-7B" \
   --adapter "AdapterP" \
-  --dataset "gsm8k" \
+  --dataset "${DATASET_NAME}" \
   --base_model "${OPENLLAMA_BASE_MODEL}" \
   --lora_weights "${REPO_DIR}/trained_models/openllama-3b-adapterp-epoch2" \
   --batch_size "${EVAL_BATCH_SIZE}" \
@@ -178,7 +221,7 @@ run_eval \
   "${REPO_DIR}/experiment/LLaMA-7B-AdapterP-gsm8k-rerun-openllama-adapterp-epoch3.json" \
   --model "LLaMA-7B" \
   --adapter "AdapterP" \
-  --dataset "gsm8k" \
+  --dataset "${DATASET_NAME}" \
   --base_model "${OPENLLAMA_BASE_MODEL}" \
   --lora_weights "${REPO_DIR}/trained_models/openllama-3b-adapterp-epoch3" \
   --batch_size "${EVAL_BATCH_SIZE}" \
@@ -192,7 +235,7 @@ run_eval \
   "${REPO_DIR}/experiment/TinyLlama-Base-gsm8k-rerun-tinyllama-base.json" \
   --model "TinyLlama" \
   --adapter "Base" \
-  --dataset "gsm8k" \
+  --dataset "${DATASET_NAME}" \
   --base_model "${TINYLLAMA_BASE_MODEL}" \
   --baseline \
   --batch_size "${EVAL_BATCH_SIZE}" \
@@ -206,7 +249,7 @@ run_eval \
   "${REPO_DIR}/experiment/TinyLlama-LoRA-gsm8k-rerun-tinyllama-lora-epoch1.json" \
   --model "TinyLlama" \
   --adapter "LoRA" \
-  --dataset "gsm8k" \
+  --dataset "${DATASET_NAME}" \
   --base_model "${TINYLLAMA_BASE_MODEL}" \
   --lora_weights "${REPO_DIR}/trained_models/tinyllama-v1.1-lora-epoch1" \
   --batch_size "${EVAL_BATCH_SIZE}" \
@@ -220,7 +263,7 @@ run_eval \
   "${REPO_DIR}/experiment/TinyLlama-LoRA-gsm8k-rerun-tinyllama-lora-epoch2.json" \
   --model "TinyLlama" \
   --adapter "LoRA" \
-  --dataset "gsm8k" \
+  --dataset "${DATASET_NAME}" \
   --base_model "${TINYLLAMA_BASE_MODEL}" \
   --lora_weights "${REPO_DIR}/trained_models/tinyllama-v1.1-lora-epoch2" \
   --batch_size "${EVAL_BATCH_SIZE}" \
@@ -234,7 +277,7 @@ run_eval \
   "${REPO_DIR}/experiment/TinyLlama-LoRA-gsm8k-rerun-tinyllama-lora-epoch3.json" \
   --model "TinyLlama" \
   --adapter "LoRA" \
-  --dataset "gsm8k" \
+  --dataset "${DATASET_NAME}" \
   --base_model "${TINYLLAMA_BASE_MODEL}" \
   --lora_weights "${REPO_DIR}/trained_models/tinyllama-v1.1-lora-epoch3" \
   --batch_size "${EVAL_BATCH_SIZE}" \
@@ -248,7 +291,7 @@ run_eval \
   "${REPO_DIR}/experiment/TinyLlama-AdapterP-gsm8k-rerun-tinyllama-adapterp-epoch1.json" \
   --model "TinyLlama" \
   --adapter "AdapterP" \
-  --dataset "gsm8k" \
+  --dataset "${DATASET_NAME}" \
   --base_model "${TINYLLAMA_BASE_MODEL}" \
   --lora_weights "${REPO_DIR}/trained_models/tinyllama-v1.1-adapterp-epoch1" \
   --batch_size "${EVAL_BATCH_SIZE}" \
@@ -262,7 +305,7 @@ run_eval \
   "${REPO_DIR}/experiment/TinyLlama-AdapterP-gsm8k-rerun-tinyllama-adapterp-epoch2.json" \
   --model "TinyLlama" \
   --adapter "AdapterP" \
-  --dataset "gsm8k" \
+  --dataset "${DATASET_NAME}" \
   --base_model "${TINYLLAMA_BASE_MODEL}" \
   --lora_weights "${REPO_DIR}/trained_models/tinyllama-v1.1-adapterp-epoch2" \
   --batch_size "${EVAL_BATCH_SIZE}" \
@@ -276,7 +319,7 @@ run_eval \
   "${REPO_DIR}/experiment/TinyLlama-AdapterP-gsm8k-rerun-tinyllama-adapterp-epoch3.json" \
   --model "TinyLlama" \
   --adapter "AdapterP" \
-  --dataset "gsm8k" \
+  --dataset "${DATASET_NAME}" \
   --base_model "${TINYLLAMA_BASE_MODEL}" \
   --lora_weights "${REPO_DIR}/trained_models/tinyllama-v1.1-adapterp-epoch3" \
   --batch_size "${EVAL_BATCH_SIZE}" \
