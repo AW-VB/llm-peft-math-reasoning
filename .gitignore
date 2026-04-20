@@ -9,3 +9,5 @@ logs/
 *.pth
 .DS_Store
 *.jsonl
+*.tsv
+*.sbatch
