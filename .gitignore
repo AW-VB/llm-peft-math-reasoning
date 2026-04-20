@@ -8,3 +8,4 @@ logs/
 *.safetensors
 *.pth
 .DS_Store
+*.jsonl
